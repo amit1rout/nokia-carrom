@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CARROM // NOKIA EDITION</title>
+  <style>
+    :root { --ink:#193637; --lcd:#afc9a8; --paper:#f0dca9; --wood:#5a321e; --edge:#29170f; --accent:#b93423; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; background:#d9d3c4; color:var(--ink); font-family:"Courier New", monospace; display:grid; place-items:center; padding:18px; }
+    .phone { width:min(100%, 540px); border:9px solid #263535; border-radius:32px; background:linear-gradient(135deg,#607175,#405154); box-shadow:0 17px 0 #2d383a, 0 30px 45px #5558; padding:18px 15px 23px; }
+    .brand { text-align:center; color:#e8e8d7; letter-spacing:4px; font-weight:bold; font-size:13px; margin:2px 0 14px; }
+    .screen { border:7px solid #273638; border-radius:12px; background:var(--lcd); padding:10px; box-shadow:inset 0 0 0 3px #789275; }
+    .top { display:flex; justify-content:space-between; font-weight:bold; font-size:11px; margin-bottom:7px; }
+    h1 { font-size:18px; letter-spacing:2px; text-align:center; margin:4px 0 8px; }
+    canvas { width:100%; aspect-ratio:1; display:block; background:var(--paper); border:4px solid #57745d; image-rendering:pixelated; touch-action:none; }
+    .message { min-height:22px; text-align:center; font-size:12px; font-weight:bold; padding-top:7px; }
+    .keys { display:grid; grid-template-columns:1fr 1.4fr 1fr; gap:9px; margin:19px 8px 4px; }
+    button { border:0; border-radius:16px; min-height:43px; background:#9eada8; color:#172728; font:700 11px "Courier New",monospace; box-shadow:inset 0 -4px #687a78, 0 3px #263536; cursor:pointer; }
+    button:active { transform:translateY(2px); box-shadow:inset 0 -2px #687a78, 0 1px #263536; }
+    .center { background:#cbd3c9; border-radius:22px; }
+    .help { margin:13px 6px 0; text-align:center; color:#e7e7d8; font-size:10px; line-height:1.5; }
+    .legend { display:flex; justify-content:space-around; font-size:10px; font-weight:bold; padding:6px 2px 0; }
+    @media (max-width:420px) { body { padding:8px; } .phone { padding:12px 9px 18px; border-width:7px; border-radius:24px; } }
+  </style>
+</head>
+<body>
+  <main class="phone">
+    <div class="brand">NOKIA</div>
+    <section class="screen">
+      <div class="top"><span>CARROM</span><span id="score">SCORE 000</span><span id="turn">TURN 01</span></div>
+      <h1>POCKET MASTER</h1>
+      <canvas id="board" width="600" height="600" aria-label="Carrom board"></canvas>
+      <div class="legend"><span>● BLACK ×9</span><span>● WHITE ×9</span><span>● RED ×1</span></div>
+      <div class="message" id="message">DRAG STRIKER TO AIM</div>
+    </section>
+    <div class="keys"><button id="reset">CLEAR<br>NEW GAME</button><button class="center" id="shoot">FIRE<br>STRIKER</button><button id="sound">SOUND<br>ON</button></div>
+    <p class="help">MOVE THE GOLD STRIKER ON THE BOTTOM DOTS.<br>PULL DOWN, THEN RELEASE TO SHOOT UP.</p>
+  </main>
+<script>
+(() => {
+  const c = document.getElementById('board'), x = c.getContext('2d');
+  const ui = { score:document.getElementById('score'), turn:document.getElementById('turn'), message:document.getElementById('message') };
+  const S=600, edge=42, pocketR=27, coinR=15, strikerR=20, baseY=516;
+  let coins=[], striker, score=0, turn=1, drag=null, sound=true, running=false, audio;
+  const tone = (hz=240, dur=.045) => { if(!sound) return; try { audio ||= new AudioContext(); const o=audio.createOscillator(), g=audio.createGain(); o.frequency.value=hz; g.gain.setValueAtTime(.04,audio.currentTime); g.gain.exponentialRampToValueAtTime(.001,audio.currentTime+dur); o.connect(g).connect(audio.destination); o.start(); o.stop(audio.currentTime+dur); } catch(e){} };
+  const ball = (px,py,r,color,kind) => ({x:px,y:py,vx:0,vy:0,r,color,kind,dead:false});
+  function reset(){
+    score=0; turn=1; running=false; drag=null;
+    coins=[];
+    // Standard Carrom opening: queen plus 9 black and 9 white coins.
+    coins.push(ball(300,300,coinR,'#b52d25','queen'));
+    const ring = (count, radius, start) => Array.from({length:count},(_,i)=>{
+      const a=start+i*Math.PI*2/count, color=i%2?'#f6f0dc':'#20201c', kind=i%2?'white':'black';
+      coins.push(ball(300+Math.cos(a)*radius,300+Math.sin(a)*radius,coinR,color,kind));
+    });
+    ring(6,31,0); ring(12,62,Math.PI/12);
+    striker=ball(300,baseY,strikerR,'#d7ad54','striker'); say('PULL DOWN TO AIM & SHOOT'); update(); draw();
+  }
+  function update(){ ui.score.textContent='SCORE '+String(score).padStart(3,'0'); ui.turn.textContent='TURN '+String(turn).padStart(2,'0'); }
+  function say(m){ ui.message.textContent=m; }
+  function board(){
+    x.clearRect(0,0,S,S);
+    let g=x.createLinearGradient(0,0,S,S);g.addColorStop(0,'#3c1e13');g.addColorStop(.52,'#81502e');g.addColorStop(1,'#30180f');x.fillStyle=g;x.fillRect(0,0,S,S);
+    x.fillStyle='#b87a43';x.fillRect(15,15,570,570);x.fillStyle='#55301d';x.fillRect(25,25,550,550);
+    g=x.createLinearGradient(edge,edge,S-edge,S-edge);g.addColorStop(0,'#f7e8bf');g.addColorStop(.55,'#ecd19a');g.addColorStop(1,'#e5c68b');x.fillStyle=g;x.fillRect(edge,edge,S-edge*2,S-edge*2);
+    x.strokeStyle='#8b522c'; x.lineWidth=4; x.strokeRect(edge,edge,S-edge*2,S-edge*2);
+    [[edge,edge],[S-edge,edge],[edge,S-edge],[S-edge,S-edge]].forEach(([px,py])=>{ x.beginPath();x.fillStyle='#20120f';x.arc(px,py,pocketR,0,7);x.fill(); x.beginPath();x.strokeStyle='#dfb568';x.lineWidth=4;x.arc(px,py,pocketR+9,0,7);x.stroke(); x.beginPath();x.strokeStyle='#744222';x.lineWidth=2;x.arc(px,py,pocketR+15,0,7);x.stroke(); });
+    x.strokeStyle='#9e6032'; x.lineWidth=2; x.beginPath(); x.arc(300,300,65,0,7);x.stroke();x.beginPath();x.arc(300,300,53,0,7);x.stroke();
+    [84,516].forEach(y=>{ x.beginPath();x.moveTo(123,y);x.lineTo(477,y);x.stroke(); x.beginPath();x.arc(300,y,42,0,7);x.stroke(); });
+    // Traditional striking marks: the big dots make the striker lane obvious on small screens.
+    [[119,84],[481,84],[119,516],[481,516],[196,516],[252,516],[348,516],[404,516]].forEach(([px,py])=>{
+      x.beginPath();x.fillStyle='#7b271e';x.arc(px,py,11,0,7);x.fill();x.beginPath();x.fillStyle='#f7dfa0';x.arc(px,py,4,0,7);x.fill();
+    });
+  }
+  function disc(b){ x.beginPath(); x.fillStyle='#5c3821';x.arc(b.x+3,b.y+4,b.r,0,7);x.fill(); x.beginPath();x.fillStyle=b.color;x.arc(b.x,b.y,b.r,0,7);x.fill(); x.beginPath();x.strokeStyle=b.kind==='white'?'#b5a98d':'#574334';x.lineWidth=2;x.arc(b.x,b.y,b.r-3,0,7);x.stroke();x.beginPath();x.strokeStyle=b.kind==='queen'?'#ffdda0':'#ffffff35';x.lineWidth=1;x.arc(b.x,b.y,b.r-6,0,7);x.stroke();if(b.kind==='queen'){x.fillStyle='#ffd37a';x.fillRect(b.x-3,b.y-3,6,6);} }
+  function aimLine(tx,ty,opacity=1){
+    const dx=striker.x-tx,dy=striker.y-ty, len=Math.hypot(dx,dy)||1;
+    const ex=striker.x+dx/len*310, ey=striker.y+dy/len*310;
+    x.save(); x.globalAlpha=opacity; x.setLineDash([7,8]);x.strokeStyle='#2b524a';x.lineWidth=3;x.beginPath();x.moveTo(striker.x,striker.y);x.lineTo(ex,ey);x.stroke();x.setLineDash([]);
+    for(let n=58;n<305;n+=58){ x.beginPath();x.fillStyle='#2b524a';x.arc(striker.x+dx/len*n,striker.y+dy/len*n,3,0,7);x.fill(); } x.restore();
+  }
+  function draw(){ board(); coins.filter(b=>!b.dead).forEach(disc); if(!striker.dead) disc(striker);
+    if(!running) aimLine(drag?drag.x:striker.x,drag?drag.y:700,drag?1:.42);
+    if(drag && !running){ const p=Math.min(1, Math.hypot(striker.x-drag.x,striker.y-drag.y)/150); x.fillStyle='#2b524a';x.fillRect(244,555,112,8);x.fillStyle='#e85032';x.fillRect(246,557,108*p,4); }
+  }
+  function pocket(b){ for(const [px,py] of [[edge,edge],[S-edge,edge],[edge,S-edge],[S-edge,S-edge]]) if(Math.hypot(b.x-px,b.y-py)<pocketR){ b.dead=true; if(b.kind==='striker'){ score=Math.max(0,score-10);say('FOUL! -10'); } else { const pts=b.kind==='queen'?50:b.kind==='white'?20:10;score+=pts;say('POCKET! +'+pts);tone(580,.1); } update(); return; } }
+  function collide(a,b){ let dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||.01,min=a.r+b.r; if(d>=min)return; let nx=dx/d,ny=dy/d, overlap=min-d; a.x-=nx*overlap/2;a.y-=ny*overlap/2; b.x+=nx*overlap/2;b.y+=ny*overlap/2; let rel=(a.vx-b.vx)*nx+(a.vy-b.vy)*ny; if(rel>0){a.vx-=rel*nx;a.vy-=rel*ny;b.vx+=rel*nx;b.vy+=rel*ny;tone(140+Math.min(300,rel*120),.03);} }
+  function physics(){ const bs=[...coins.filter(b=>!b.dead),striker].filter(b=>!b.dead); let active=false; for(const b of bs){ b.x+=b.vx;b.y+=b.vy;b.vx*=.987;b.vy*=.987; if(Math.hypot(b.vx,b.vy)>.08)active=true; for(const v of ['x','y']){ const lo=edge+ b.r, hi=S-edge-b.r; if(b[v]<lo||b[v]>hi){b[v]=Math.max(lo,Math.min(hi,b[v]));b['v'+v]*=-.75;tone(90,.025);} } pocket(b); } for(let i=0;i<bs.length;i++)for(let j=i+1;j<bs.length;j++)collide(bs[i],bs[j]); draw(); if(active)requestAnimationFrame(physics); else if(running){running=false;striker.dead=false;striker.x=300;striker.y=baseY;striker.vx=striker.vy=0;turn++;update(); if(coins.every(b=>b.dead))say('BOARD CLEARED! '+score+' PTS');else say('TURN '+turn+' — AIM AGAIN');draw();} }
+  function pos(e){const r=c.getBoundingClientRect(), p=e.touches?e.touches[0]:e;return{x:(p.clientX-r.left)*S/r.width,y:(p.clientY-r.top)*S/r.height};}
+  c.addEventListener('pointerdown',e=>{if(running)return;const p=pos(e); if(p.y>476){striker.x=Math.max(140,Math.min(460,p.x));striker.y=baseY;drag={x:striker.x,y:p.y};c.setPointerCapture(e.pointerId);say('PULL DOWN TO SET POWER');draw();}});
+  c.addEventListener('pointermove',e=>{if(!drag||running)return;const p=pos(e); if(p.y>476 && Math.abs(p.x-striker.x)>18){striker.x=Math.max(140,Math.min(460,p.x));drag={x:striker.x,y:p.y};}else drag=p; draw();});
+  c.addEventListener('pointerup',e=>{if(!drag||running)return;const p=pos(e); const dx=striker.x-p.x,dy=striker.y-p.y; drag=null; if(dy>=-12){say('PULL BELOW THE STRIKER TO SHOOT');draw();return;} const power=Math.min(10,Math.hypot(dx,dy)/13); if(power<.5){draw();return;} striker.vx=dx/Math.hypot(dx,dy)*power;striker.vy=dy/Math.hypot(dx,dy)*power;running=true;say('STRIKER AWAY!');tone(290,.07);physics();});
+  document.getElementById('reset').onclick=reset;
+  document.getElementById('shoot').onclick=()=>{if(!running){striker.vx=0;striker.vy=-7;running=true;say('STRAIGHT SHOT!');physics();}};
+  document.getElementById('sound').onclick=e=>{sound=!sound;e.currentTarget.innerHTML='SOUND<br>'+ (sound?'ON':'OFF');};
+  reset();
+})();
+</script>
+</body>
+</html>
