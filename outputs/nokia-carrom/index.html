@@ -39,96 +39,73 @@
   </main>
 <script>
 (() => {
-  const c = document.getElementById('board'), x = c.getContext('2d');
-  const ui = { p1:document.getElementById('p1'), p2:document.getElementById('p2'), turn:document.getElementById('turn'), message:document.getElementById('message'), help:document.getElementById('help') };
-  const S=600, edge=42, pocketR=27, coinR=15, strikerR=20, baseY=516;
-  let coins=[], striker, scores=[0,0], current=0, round=1, drag=null, sound=true, running=false, audio, shotOwnPocket=false, shotFoul=false;
-  const tone = (hz=240, dur=.045) => { if(!sound) return; try { audio ||= new AudioContext(); const o=audio.createOscillator(), g=audio.createGain(); o.frequency.value=hz; g.gain.setValueAtTime(.04,audio.currentTime); g.gain.exponentialRampToValueAtTime(.001,audio.currentTime+dur); o.connect(g).connect(audio.destination); o.start(); o.stop(audio.currentTime+dur); } catch(e){} };
-  const ball = (px,py,r,color,kind) => ({x:px,y:py,vx:0,vy:0,r,color,kind,dead:false});
+  const canvas=document.getElementById('board'), ctx=canvas.getContext('2d');
+  const ui={p1:document.getElementById('p1'),p2:document.getElementById('p2'),turn:document.getElementById('turn'),message:document.getElementById('message'),help:document.getElementById('help')};
+  const S=600, EDGE=42, POCKET_RADIUS=30, POCKET_HIT=25, COIN_R=15, STRIKER_R=20, BASE_BOTTOM=516, BASE_TOP=84, STEP=1/60, DAMPING=.985, STOP_SPEED=.1, MAX_SHOT=14;
+  const pockets=[[EDGE,EDGE],[S-EDGE,EDGE],[EDGE,S-EDGE],[S-EDGE,S-EDGE]];
+  let pieces=[], striker, current=0, players, drag=null, inShot=false, shot, queenPending=null, sound=true, audio, accumulator=0, previous=performance.now(), aiTimer=0;
+  const playerName=()=>current===0?'P1':'P2';
+  const baselineY=()=>current===0?BASE_BOTTOM:BASE_TOP;
+  const ownColor=()=>players[current].color;
+  const makePiece=(x,y,r,mass,color,kind)=>({x,y,vx:0,vy:0,r,mass,color,kind,dead:false});
+  const tone=(hz=220,duration=.045)=>{if(!sound)return;try{audio??=new AudioContext();const o=audio.createOscillator(),g=audio.createGain();o.frequency.value=hz;g.gain.setValueAtTime(.035,audio.currentTime);g.gain.exponentialRampToValueAtTime(.001,audio.currentTime+duration);o.connect(g).connect(audio.destination);o.start();o.stop(audio.currentTime+duration);}catch{}};
   function reset(){
-    scores=[0,0]; current=0; round=1; running=false; drag=null; shotOwnPocket=false; shotFoul=false;
-    coins=[];
-    // Standard Carrom opening: queen plus 9 black and 9 white coins.
-    coins.push(ball(300,300,coinR,'#b52d25','queen'));
-    const ring = (count, radius, start) => Array.from({length:count},(_,i)=>{
-      const a=start+i*Math.PI*2/count, color=i%2?'#f6f0dc':'#20201c', kind=i%2?'white':'black';
-      coins.push(ball(300+Math.cos(a)*radius,300+Math.sin(a)*radius,coinR,color,kind));
-    });
-    ring(6,31,0); ring(12,62,Math.PI/12);
-    striker=ball(300,baseY,strikerR,'#d7ad54','striker'); say('PULL DOWN TO AIM & SHOOT'); update(); draw();
+    clearTimeout(aiTimer); current=0; drag=null; inShot=false; queenPending=null; players=[{color:null,score:0,captured:[]},{color:null,score:0,captured:[]}]; pieces=[];
+    pieces.push(makePiece(300,300,COIN_R,1,'#b52d25','queen'));
+    const addRing=(count,radius,start)=>{for(let i=0;i<count;i++){const a=start+i*Math.PI*2/count;const kind=i%2?'white':'black';pieces.push(makePiece(300+Math.cos(a)*radius,300+Math.sin(a)*radius,COIN_R,1,kind==='white'?'#f6f0dc':'#20201c',kind));}};
+    addRing(6,31,0); addRing(12,62,Math.PI/12);
+    striker=makePiece(300,BASE_BOTTOM,STRIKER_R,3,'#d7ad54','striker'); updateUI(); say('P1: PLACE THE STRIKER, PULL DOWN, RELEASE.'); draw();
   }
-  function strikerY(){ return current===0 ? baseY : S-baseY; }
-  function playerName(){ return 'P'+(current+1); }
-  function update(){
-    ui.p1.textContent='P1 '+String(scores[0]).padStart(3,'0');
-    ui.p2.textContent='P2 '+String(scores[1]).padStart(3,'0');
-    ui.turn.textContent=playerName()+' TURN';
-    ui.help.innerHTML=current===0
-      ? 'YOU ARE P1 (BLACK). MOVE ON THE BOTTOM DOTS.<br>PULL DOWN, THEN RELEASE TO SHOOT UP.'
-      : 'P2 (WHITE) IS AIMING FROM THE TOP…<br>SUCCESSFUL OWN-COLOUR POCKETS KEEP THE TURN.';
+  function updateUI(){
+    const label=i=>players[i].color?players[i].color[0].toUpperCase()+players[i].color.slice(1):'—';
+    ui.p1.textContent=`P1 ${String(players[0].score).padStart(3,'0')} ${label(0)}`;
+    ui.p2.textContent=`P2 ${String(players[1].score).padStart(3,'0')} ${label(1)}`;
+    ui.turn.textContent=`${playerName()} ${current===0?'TURN':'AI'}`;
+    ui.help.innerHTML=current===0?'YOU ARE P1. PLACE ON THE BOTTOM LINE.<br>PULL DOWN TO AIM, THEN RELEASE TO SHOOT.':'P2 IS PLAYING FROM THE TOP LINE…<br>POCKET YOUR COLOUR TO KEEP THE TURN.';
   }
-  function say(m){ ui.message.textContent=m; }
-  function board(){
-    x.clearRect(0,0,S,S);
-    let g=x.createLinearGradient(0,0,S,S);g.addColorStop(0,'#3c1e13');g.addColorStop(.52,'#81502e');g.addColorStop(1,'#30180f');x.fillStyle=g;x.fillRect(0,0,S,S);
-    x.fillStyle='#b87a43';x.fillRect(15,15,570,570);x.fillStyle='#55301d';x.fillRect(25,25,550,550);
-    g=x.createLinearGradient(edge,edge,S-edge,S-edge);g.addColorStop(0,'#f7e8bf');g.addColorStop(.55,'#ecd19a');g.addColorStop(1,'#e5c68b');x.fillStyle=g;x.fillRect(edge,edge,S-edge*2,S-edge*2);
-    x.strokeStyle='#8b522c'; x.lineWidth=4; x.strokeRect(edge,edge,S-edge*2,S-edge*2);
-    [[edge,edge],[S-edge,edge],[edge,S-edge],[S-edge,S-edge]].forEach(([px,py])=>{ x.beginPath();x.fillStyle='#20120f';x.arc(px,py,pocketR,0,7);x.fill(); x.beginPath();x.strokeStyle='#dfb568';x.lineWidth=4;x.arc(px,py,pocketR+9,0,7);x.stroke(); x.beginPath();x.strokeStyle='#744222';x.lineWidth=2;x.arc(px,py,pocketR+15,0,7);x.stroke(); });
-    x.strokeStyle='#9e6032'; x.lineWidth=2; x.beginPath(); x.arc(300,300,65,0,7);x.stroke();x.beginPath();x.arc(300,300,53,0,7);x.stroke();
-    [84,516].forEach(y=>{ x.beginPath();x.moveTo(123,y);x.lineTo(477,y);x.stroke(); x.beginPath();x.arc(300,y,42,0,7);x.stroke(); });
-    // Traditional striking marks: the big dots make the striker lane obvious on small screens.
-    [[119,84],[481,84],[119,516],[481,516],[196,516],[252,516],[348,516],[404,516]].forEach(([px,py])=>{
-      x.beginPath();x.fillStyle='#7b271e';x.arc(px,py,11,0,7);x.fill();x.beginPath();x.fillStyle='#f7dfa0';x.arc(px,py,4,0,7);x.fill();
-    });
+  const say=text=>ui.message.textContent=text;
+  function drawBoard(){
+    ctx.clearRect(0,0,S,S);let g=ctx.createLinearGradient(0,0,S,S);g.addColorStop(0,'#3c1e13');g.addColorStop(.5,'#81502e');g.addColorStop(1,'#30180f');ctx.fillStyle=g;ctx.fillRect(0,0,S,S);ctx.fillStyle='#b87a43';ctx.fillRect(15,15,570,570);ctx.fillStyle='#55301d';ctx.fillRect(25,25,550,550);
+    g=ctx.createLinearGradient(EDGE,EDGE,S-EDGE,S-EDGE);g.addColorStop(0,'#f7e8bf');g.addColorStop(.6,'#ecd19a');g.addColorStop(1,'#e5c68b');ctx.fillStyle=g;ctx.fillRect(EDGE,EDGE,S-EDGE*2,S-EDGE*2);ctx.strokeStyle='#8b522c';ctx.lineWidth=4;ctx.strokeRect(EDGE,EDGE,S-EDGE*2,S-EDGE*2);
+    pockets.forEach(([px,py])=>{ctx.beginPath();ctx.fillStyle='#20120f';ctx.arc(px,py,POCKET_RADIUS,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.strokeStyle='#dfb568';ctx.lineWidth=4;ctx.arc(px,py,POCKET_RADIUS+9,0,Math.PI*2);ctx.stroke();});
+    ctx.strokeStyle='#9e6032';ctx.lineWidth=2;[65,53].forEach(r=>{ctx.beginPath();ctx.arc(300,300,r,0,Math.PI*2);ctx.stroke();});
+    [BASE_TOP,BASE_BOTTOM].forEach(y=>{ctx.beginPath();ctx.moveTo(123,y);ctx.lineTo(477,y);ctx.stroke();ctx.beginPath();ctx.arc(300,y,42,0,Math.PI*2);ctx.stroke();});
+    [[119,BASE_TOP],[481,BASE_TOP],[119,BASE_BOTTOM],[481,BASE_BOTTOM],[196,BASE_BOTTOM],[252,BASE_BOTTOM],[348,BASE_BOTTOM],[404,BASE_BOTTOM]].forEach(([px,py])=>{ctx.beginPath();ctx.fillStyle='#7b271e';ctx.arc(px,py,11,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.fillStyle='#f7dfa0';ctx.arc(px,py,4,0,Math.PI*2);ctx.fill();});
   }
-  function disc(b){ x.beginPath(); x.fillStyle='#5c3821';x.arc(b.x+3,b.y+4,b.r,0,7);x.fill(); x.beginPath();x.fillStyle=b.color;x.arc(b.x,b.y,b.r,0,7);x.fill(); x.beginPath();x.strokeStyle=b.kind==='white'?'#b5a98d':'#574334';x.lineWidth=2;x.arc(b.x,b.y,b.r-3,0,7);x.stroke();x.beginPath();x.strokeStyle=b.kind==='queen'?'#ffdda0':'#ffffff35';x.lineWidth=1;x.arc(b.x,b.y,b.r-6,0,7);x.stroke();if(b.kind==='queen'){x.fillStyle='#ffd37a';x.fillRect(b.x-3,b.y-3,6,6);} }
-  function aimLine(tx,ty,opacity=1){
-    const dx=striker.x-tx,dy=striker.y-ty, len=Math.hypot(dx,dy)||1;
-    const ex=striker.x+dx/len*310, ey=striker.y+dy/len*310;
-    x.save(); x.globalAlpha=opacity; x.setLineDash([7,8]);x.strokeStyle='#2b524a';x.lineWidth=3;x.beginPath();x.moveTo(striker.x,striker.y);x.lineTo(ex,ey);x.stroke();x.setLineDash([]);
-    for(let n=58;n<305;n+=58){ x.beginPath();x.fillStyle='#2b524a';x.arc(striker.x+dx/len*n,striker.y+dy/len*n,3,0,7);x.fill(); } x.restore();
+  function drawPiece(p){ctx.beginPath();ctx.fillStyle='#5c3821';ctx.arc(p.x+3,p.y+4,p.r,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.fillStyle=p.color;ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.strokeStyle=p.kind==='white'?'#b5a98d':'#574334';ctx.lineWidth=2;ctx.arc(p.x,p.y,p.r-3,0,Math.PI*2);ctx.stroke();if(p.kind==='queen'){ctx.fillStyle='#ffd37a';ctx.fillRect(p.x-3,p.y-3,6,6);}}
+  function drawAim(){if(inShot||current!==0)return;const target=drag??{x:striker.x,y:700},dx=striker.x-target.x,dy=striker.y-target.y,d=Math.hypot(dx,dy)||1;ctx.save();ctx.globalAlpha=drag?1:.4;ctx.setLineDash([7,8]);ctx.strokeStyle='#2b524a';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(striker.x,striker.y);ctx.lineTo(striker.x+dx/d*310,striker.y+dy/d*310);ctx.stroke();ctx.restore();if(drag){const p=Math.min(1,d/44);ctx.fillStyle='#2b524a';ctx.fillRect(244,555,112,8);ctx.fillStyle='#e85032';ctx.fillRect(246,557,p*108,4);}}
+  function draw(){drawBoard();pieces.filter(p=>!p.dead).forEach(drawPiece);if(!striker.dead)drawPiece(striker);drawAim();}
+  function assignColors(kind){if(players[0].color||!['white','black'].includes(kind))return;players[current].color=kind;players[1-current].color=kind==='white'?'black':'white';say(`${playerName()} IS ${kind.toUpperCase()} — POCKET YOUR COLOUR.`);updateUI();}
+  function returnCapturedPiece(player){const p=[...players[player].captured].reverse().find(piece=>piece.dead);if(!p)return;players[player].captured=players[player].captured.filter(item=>item!==p);p.dead=false;p.vx=p.vy=0;p.x=300;p.y=300;for(let i=0;i<pieces.length;i++){const other=pieces[i];if(other===p||other.dead)continue;const d=Math.hypot(p.x-other.x,p.y-other.y);if(d<31){p.x+=18;p.y+=18;}}}
+  function respawnQueen(){const q=pieces.find(p=>p.kind==='queen');if(!q||!q.dead)return;q.dead=false;q.vx=q.vy=0;q.x=300;q.y=300;for(const p of pieces){if(p===q||p.dead)continue;const d=Math.hypot(q.x-p.x,q.y-p.y);if(d<31){q.x=300;q.y=250;break;}}}
+  function pocket(p){
+    if(p.dead)return; p.dead=true;
+    if(p.kind==='striker'){shot.foul=true;players[current].score=Math.max(0,players[current].score-10);returnCapturedPiece(current);say('STRIKER FOUL — A CAPTURED PIECE RETURNS.');tone(120,.1);updateUI();return;}
+    if(p.kind==='queen'){shot.queen=true;queenPending={owner:current};say(`${playerName()} POCKETED THE QUEEN — COVER IT NEXT SHOT.`);tone(680,.12);return;}
+    assignColors(p.kind);const own=ownColor()===p.kind;
+    if(own){shot.own=true;players[current].score+=10;players[current].captured.push(p);say(`${playerName()} POCKET! PLAY AGAIN.`);tone(560,.1);}else{shot.opponent=true;say('OPPONENT COIN POCKETED — TURN PASSES.');tone(180,.08);}updateUI();
   }
-  function draw(){ board(); coins.filter(b=>!b.dead).forEach(disc); if(!striker.dead) disc(striker);
-    if(!running) aimLine(drag?drag.x:striker.x,drag?drag.y:(current===0?700:-100),drag?1:.42);
-    if(drag && !running){ const p=Math.min(1, Math.hypot(striker.x-drag.x,striker.y-drag.y)/45); const py=current===0?555:37; x.fillStyle='#2b524a';x.fillRect(244,py,112,8);x.fillStyle='#e85032';x.fillRect(246,py+2,108*p,4); }
-  }
-  function pocket(b){ for(const [px,py] of [[edge,edge],[S-edge,edge],[edge,S-edge],[S-edge,S-edge]]) if(Math.hypot(b.x-px,b.y-py)<pocketR){
-    b.dead=true; const ownColour=current===0?'black':'white';
-    if(b.kind==='striker'){ scores[current]=Math.max(0,scores[current]-10);shotFoul=true;say('FOUL! -10'); }
-    else if(b.kind==='queen'){ scores[current]+=50;say(playerName()+' QUEEN! +50');tone(680,.12); }
-    else if(b.kind===ownColour){ scores[current]+=10;shotOwnPocket=true;say(playerName()+' POCKET! +10 — PLAY AGAIN');tone(580,.1); }
-    else { say('OPPONENT COIN — TURN PASSES');tone(180,.08); }
-    update(); return;
-  } }
-  function collide(a,b){ let dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||.01,min=a.r+b.r; if(d>=min)return; let nx=dx/d,ny=dy/d, overlap=min-d; a.x-=nx*overlap/2;a.y-=ny*overlap/2; b.x+=nx*overlap/2;b.y+=ny*overlap/2; let rel=(a.vx-b.vx)*nx+(a.vy-b.vy)*ny; if(rel>0){a.vx-=rel*nx;a.vy-=rel*ny;b.vx+=rel*nx;b.vy+=rel*ny;tone(140+Math.min(300,rel*120),.03);} }
-  function beginShot(vx,vy,message){ shotOwnPocket=false;shotFoul=false;striker.vx=vx;striker.vy=vy;running=true;say(message);tone(290,.07);physics(); }
+  function checkPockets(p){for(const [px,py] of pockets)if((p.x-px)**2+(p.y-py)**2<POCKET_HIT**2){pocket(p);return;}}
+  function wallCollision(p){const lo=EDGE+p.r,hi=S-EDGE-p.r;if(p.x<lo){p.x=lo;p.vx=-p.vx;}else if(p.x>hi){p.x=hi;p.vx=-p.vx;}if(p.y<lo){p.y=lo;p.vy=-p.vy;}else if(p.y>hi){p.y=hi;p.vy=-p.vy;}}
+  function collide(a,b){const dx=b.x-a.x,dy=b.y-a.y,rr=a.r+b.r,ds=dx*dx+dy*dy;if(ds>=rr*rr)return;const d=Math.sqrt(ds)||.001,nx=dx/d,ny=dy/d,overlap=rr-d,totalInv=1/a.mass+1/b.mass;a.x-=nx*overlap*(1/a.mass)/totalInv;a.y-=ny*overlap*(1/a.mass)/totalInv;b.x+=nx*overlap*(1/b.mass)/totalInv;b.y+=ny*overlap*(1/b.mass)/totalInv;const relative=(b.vx-a.vx)*nx+(b.vy-a.vy)*ny;if(relative>=0)return;const impulse=-(2*relative)/totalInv;a.vx-=impulse*nx/a.mass;a.vy-=impulse*ny/a.mass;b.vx+=impulse*nx/b.mass;b.vy+=impulse*ny/b.mass;tone(120+Math.min(280,Math.abs(impulse)*70),.025);}
+  function allBodies(){return [...pieces.filter(p=>!p.dead),striker].filter(p=>!p.dead);}
+  function stepPhysics(){const bodies=allBodies();for(const p of bodies){p.x+=p.vx;p.y+=p.vy;p.vx*=DAMPING;p.vy*=DAMPING;if(Math.hypot(p.vx,p.vy)<STOP_SPEED)p.vx=p.vy=0;checkPockets(p);if(!p.dead)wallCollision(p);}for(let i=0;i<bodies.length;i++)for(let j=i+1;j<bodies.length;j++)if(!bodies[i].dead&&!bodies[j].dead)collide(bodies[i],bodies[j]);if(inShot&&!allBodies().some(p=>p.vx||p.vy))finishTurn();}
+  function beginShot(vx,vy,message){if(inShot)return;drag=null;shot={own:false,opponent:false,queen:false,foul:false,coverAttempt:Boolean(queenPending&&queenPending.owner===current)};striker.vx=vx;striker.vy=vy;inShot=true;say(message);tone(290,.07);}
   function finishTurn(){
-    running=false;striker.dead=false;
-    if(coins.every(b=>b.dead)){ update();say('BOARD CLEARED! P1 '+scores[0]+' / P2 '+scores[1]);draw();return; }
-    if(!shotOwnPocket || shotFoul){ current=1-current; if(current===0)round++; }
-    striker.x=300;striker.y=strikerY();striker.vx=striker.vy=0;update();draw();
-    if(current===1){ say('P2 IS AIMING…');setTimeout(aiTurn,700); }
-    else say(shotOwnPocket?'P1 SCORED — PLAY AGAIN':'P1 — AIM AND SHOOT');
+    inShot=false;striker.dead=false;striker.vx=striker.vy=0;if(pieces.every(p=>p.dead)){say(`BOARD CLEARED — P1 ${players[0].score} / P2 ${players[1].score}`);updateUI();draw();return;}
+    let keep=shot.own&&!shot.opponent&&!shot.foul;
+    if(shot.coverAttempt){if(shot.own&&!shot.foul){queenPending=null;keep=true;say(`${playerName()} COVERED THE QUEEN!`);}else{respawnQueen();queenPending=null;keep=false;say('QUEEN NOT COVERED — RETURNED TO CENTRE.');}}
+    else if(shot.queen)keep=!shot.foul;
+    if(!keep)current=1-current;striker.x=300;striker.y=baselineY();updateUI();draw();
+    if(current===1){say('P2 IS AIMING…');clearTimeout(aiTimer);aiTimer=setTimeout(aiTurn,650);}else if(keep)say('P1 SCORED — PLAY AGAIN.');else say('P1 — AIM AND SHOOT.');
   }
-  function physics(){ const bs=[...coins.filter(b=>!b.dead),striker].filter(b=>!b.dead); let active=false; for(const b of bs){ b.x+=b.vx;b.y+=b.vy;b.vx*=.987;b.vy*=.987; if(Math.hypot(b.vx,b.vy)>.08)active=true; for(const v of ['x','y']){ const lo=edge+ b.r, hi=S-edge-b.r; if(b[v]<lo||b[v]>hi){b[v]=Math.max(lo,Math.min(hi,b[v]));b['v'+v]*=-.75;tone(90,.025);} } pocket(b); } for(let i=0;i<bs.length;i++)for(let j=i+1;j<bs.length;j++)collide(bs[i],bs[j]); draw(); if(active)requestAnimationFrame(physics); else if(running)finishTurn(); }
-  function aiTurn(){
-    if(running || current!==1)return;
-    const targets=coins.filter(b=>!b.dead && (b.kind==='white' || b.kind==='queen'));
-    if(!targets.length){ current=0;striker.y=strikerY();update();say('P1 — AIM AND SHOOT');draw();return; }
-    const target=targets.reduce((best,b)=>Math.abs(b.x-300)+b.y < Math.abs(best.x-300)+best.y ? b:best,targets[0]);
-    striker.x=Math.max(145,Math.min(455,target.x));striker.y=strikerY();
-    const dx=target.x-striker.x,dy=target.y-striker.y, d=Math.hypot(dx,dy)||1, power=Math.min(10,6+d/65);
-    beginShot(dx/d*power,dy/d*power,'P2 STRIKER AWAY!');
-  }
-  function pos(e){const r=c.getBoundingClientRect(), p=e.touches?e.touches[0]:e;return{x:(p.clientX-r.left)*S/r.width,y:(p.clientY-r.top)*S/r.height};}
-  c.addEventListener('pointerdown',e=>{if(running || current!==0)return;const p=pos(e), ownSide=p.y>455; if(ownSide){striker.x=Math.max(130,Math.min(470,p.x));striker.y=strikerY();drag={x:striker.x,y:p.y};c.setPointerCapture(e.pointerId);say('P1: PULL DOWN TO SET POWER');draw();}});
-  c.addEventListener('pointermove',e=>{if(!drag||running)return;const p=pos(e), ownSide=p.y>455; if(ownSide && Math.abs(p.x-striker.x)>14){striker.x=Math.max(130,Math.min(470,p.x));drag={x:striker.x,y:p.y};}else drag=p; draw();});
-  c.addEventListener('pointerup',e=>{if(!drag||running)return;const p=pos(e); const dx=striker.x-p.x,dy=striker.y-p.y;drag=null; if(dy>=-6){say('PULL BELOW THE STRIKER TO SHOOT');draw();return;} const power=Math.min(12,Math.hypot(dx,dy)/3.5); if(power<.5){draw();return;} const d=Math.hypot(dx,dy);beginShot(dx/d*power,dy/d*power,'P1 STRIKER AWAY!');});
-  document.getElementById('reset').onclick=reset;
-  document.getElementById('shoot').onclick=()=>{if(!running && current===0)beginShot(0,-10,'P1 STRAIGHT SHOT!');};
-  document.getElementById('sound').onclick=e=>{sound=!sound;e.currentTarget.innerHTML='SOUND<br>'+ (sound?'ON':'OFF');};
-  reset();
+  function aiTurn(){if(inShot||current!==1)return;const targetColor=ownColor()??'black';const options=pieces.filter(p=>!p.dead&&(p.kind===targetColor||p.kind==='queen'));if(!options.length){current=0;striker.y=baselineY();updateUI();draw();return;}const target=options.reduce((best,p)=>p.y>best.y?p:best,options[0]);striker.x=Math.max(135,Math.min(465,target.x));striker.y=BASE_TOP;const dx=target.x-striker.x,dy=target.y-striker.y,d=Math.hypot(dx,dy)||1,power=Math.min(MAX_SHOT,7+d/55);beginShot(dx/d*power,dy/d*power,'P2 STRIKER AWAY!');}
+  function eventPos(e){const r=canvas.getBoundingClientRect();return{x:(e.clientX-r.left)*S/r.width,y:(e.clientY-r.top)*S/r.height};}
+  canvas.addEventListener('pointerdown',e=>{if(current!==0||inShot)return;const p=eventPos(e);if(p.y<450)return;striker.x=Math.max(130,Math.min(470,p.x));striker.y=BASE_BOTTOM;drag={x:p.x,y:p.y};canvas.setPointerCapture(e.pointerId);say('PULL BELOW THE STRIKER TO SET POWER.');draw();});
+  canvas.addEventListener('pointermove',e=>{if(!drag||inShot)return;const p=eventPos(e);if(p.y>450&&Math.abs(p.x-striker.x)>14){striker.x=Math.max(130,Math.min(470,p.x));drag={x:striker.x,y:p.y};}else drag=p;draw();});
+  canvas.addEventListener('pointerup',e=>{if(!drag||inShot)return;const p=eventPos(e),dx=striker.x-p.x,dy=striker.y-p.y;drag=null;if(dy>=-5){say('PULL BELOW THE STRIKER TO SHOOT.');draw();return;}const d=Math.hypot(dx,dy),power=Math.min(MAX_SHOT,d*.32);if(power<.5)return;beginShot(dx/d*power,dy/d*power,'P1 STRIKER AWAY!');});
+  document.getElementById('reset').onclick=reset;document.getElementById('shoot').onclick=()=>{if(current===0&&!inShot)beginShot(0,-10,'P1 STRAIGHT SHOT!');};document.getElementById('sound').onclick=e=>{sound=!sound;e.currentTarget.innerHTML='SOUND<br>'+(sound?'ON':'OFF');};
+  function loop(now){accumulator+=Math.min(.1,(now-previous)/1000);previous=now;while(accumulator>=STEP){if(inShot)stepPhysics();accumulator-=STEP;}draw();requestAnimationFrame(loop);}reset();requestAnimationFrame(loop);
 })();
 </script>
 </body>
