@@ -43,14 +43,14 @@
   const ui={p1:document.getElementById('p1'),p2:document.getElementById('p2'),turn:document.getElementById('turn'),message:document.getElementById('message'),help:document.getElementById('help')};
   const S=600, EDGE=42, POCKET_RADIUS=30, POCKET_HIT=25, COIN_R=15, STRIKER_R=20, BASE_BOTTOM=516, BASE_TOP=84, STEP=1/60, DAMPING=.985, STOP_SPEED=.1, MAX_SHOT=14;
   const pockets=[[EDGE,EDGE],[S-EDGE,EDGE],[EDGE,S-EDGE],[S-EDGE,S-EDGE]];
-  let pieces=[], striker, current=0, players, drag=null, inShot=false, shot, queenPending=null, sound=true, audio, accumulator=0, previous=performance.now(), aiTimer=0;
+  let pieces=[], striker, current=0, players, matchScores=[0,0], drag=null, inShot=false, boardFinished=false, shot, queenState='BOARD_CENTER', queenOwner=null, sound=true, audio, accumulator=0, previous=performance.now(), aiTimer=0;
   const playerName=()=>current===0?'P1':'P2';
   const baselineY=()=>current===0?BASE_BOTTOM:BASE_TOP;
   const ownColor=()=>players[current].color;
   const makePiece=(x,y,r,mass,color,kind)=>({x,y,vx:0,vy:0,r,mass,color,kind,dead:false});
   const tone=(hz=220,duration=.045)=>{if(!sound)return;try{audio??=new AudioContext();const o=audio.createOscillator(),g=audio.createGain();o.frequency.value=hz;g.gain.setValueAtTime(.035,audio.currentTime);g.gain.exponentialRampToValueAtTime(.001,audio.currentTime+duration);o.connect(g).connect(audio.destination);o.start();o.stop(audio.currentTime+duration);}catch{}};
-  function reset(){
-    clearTimeout(aiTimer); current=0; drag=null; inShot=false; queenPending=null; players=[{color:null,score:0,captured:[]},{color:null,score:0,captured:[]}]; pieces=[];
+  function startBoard(preserveMatch=true){
+    clearTimeout(aiTimer); if(!preserveMatch)matchScores=[0,0]; current=0; drag=null; inShot=false; boardFinished=false; queenState='BOARD_CENTER'; queenOwner=null; players=[{color:null,captured:[]},{color:null,captured:[]}]; pieces=[];
     pieces.push(makePiece(300,300,COIN_R,1,'#b52d25','queen'));
     const addRing=(count,radius,start)=>{for(let i=0;i<count;i++){const a=start+i*Math.PI*2/count;const kind=i%2?'white':'black';pieces.push(makePiece(300+Math.cos(a)*radius,300+Math.sin(a)*radius,COIN_R,1,kind==='white'?'#f6f0dc':'#20201c',kind));}};
     addRing(6,31,0); addRing(12,62,Math.PI/12);
@@ -58,8 +58,8 @@
   }
   function updateUI(){
     const label=i=>players[i].color?players[i].color[0].toUpperCase()+players[i].color.slice(1):'—';
-    ui.p1.textContent=`P1 ${String(players[0].score).padStart(3,'0')} ${label(0)}`;
-    ui.p2.textContent=`P2 ${String(players[1].score).padStart(3,'0')} ${label(1)}`;
+    ui.p1.textContent=`P1 ${String(matchScores[0]).padStart(2,'0')} (${players[0].captured.length}/9) ${label(0)}`;
+    ui.p2.textContent=`P2 ${String(matchScores[1]).padStart(2,'0')} (${players[1].captured.length}/9) ${label(1)}`;
     ui.turn.textContent=`${playerName()} ${current===0?'TURN':'AI'}`;
     ui.help.innerHTML=current===0?'YOU ARE P1. PLACE ON THE BOTTOM LINE.<br>PULL DOWN TO AIM, THEN RELEASE TO SHOOT.':'P2 IS PLAYING FROM THE TOP LINE…<br>POCKET YOUR COLOUR TO KEEP THE TURN.';
   }
@@ -76,27 +76,31 @@
   function drawAim(){if(inShot||current!==0)return;const target=drag??{x:striker.x,y:700},dx=striker.x-target.x,dy=striker.y-target.y,d=Math.hypot(dx,dy)||1;ctx.save();ctx.globalAlpha=drag?1:.4;ctx.setLineDash([7,8]);ctx.strokeStyle='#2b524a';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(striker.x,striker.y);ctx.lineTo(striker.x+dx/d*310,striker.y+dy/d*310);ctx.stroke();ctx.restore();if(drag){const p=Math.min(1,d/44);ctx.fillStyle='#2b524a';ctx.fillRect(244,555,112,8);ctx.fillStyle='#e85032';ctx.fillRect(246,557,p*108,4);}}
   function draw(){drawBoard();pieces.filter(p=>!p.dead).forEach(drawPiece);if(!striker.dead)drawPiece(striker);drawAim();}
   function assignColors(kind){if(players[0].color||!['white','black'].includes(kind))return;players[current].color=kind;players[1-current].color=kind==='white'?'black':'white';say(`${playerName()} IS ${kind.toUpperCase()} — POCKET YOUR COLOUR.`);updateUI();}
-  function returnCapturedPiece(player){const p=[...players[player].captured].reverse().find(piece=>piece.dead);if(!p)return;players[player].captured=players[player].captured.filter(item=>item!==p);p.dead=false;p.vx=p.vy=0;p.x=300;p.y=300;for(let i=0;i<pieces.length;i++){const other=pieces[i];if(other===p||other.dead)continue;const d=Math.hypot(p.x-other.x,p.y-other.y);if(d<31){p.x+=18;p.y+=18;}}}
-  function respawnQueen(){const q=pieces.find(p=>p.kind==='queen');if(!q||!q.dead)return;q.dead=false;q.vx=q.vy=0;q.x=300;q.y=300;for(const p of pieces){if(p===q||p.dead)continue;const d=Math.hypot(q.x-p.x,q.y-p.y);if(d<31){q.x=300;q.y=250;break;}}}
+  function returnCapturedPiece(player){const p=players[player].captured.pop();if(!p)return;p.dead=false;p.vx=p.vy=0;p.x=300;p.y=300;while(pieces.some(other=>other!==p&&!other.dead&&Math.hypot(p.x-other.x,p.y-other.y)<31))p.y+=18;}
+  function respawnQueen(){const q=pieces.find(p=>p.kind==='queen');if(!q)return;q.dead=false;q.vx=q.vy=0;q.x=300;q.y=300;}
   function pocket(p){
     if(p.dead)return; p.dead=true;
-    if(p.kind==='striker'){shot.foul=true;players[current].score=Math.max(0,players[current].score-10);returnCapturedPiece(current);say('STRIKER FOUL — A CAPTURED PIECE RETURNS.');tone(120,.1);updateUI();return;}
-    if(p.kind==='queen'){shot.queen=true;queenPending={owner:current};say(`${playerName()} POCKETED THE QUEEN — COVER IT NEXT SHOT.`);tone(680,.12);return;}
+    if(p.kind==='striker'){shot.strikerPocketed=true;shot.foul=true;say('STRIKER FOUL — TURN WILL PASS.');tone(120,.1);return;}
+    if(p.kind==='queen'){shot.queen=true;queenState='POCKETED_UNCOVERED';queenOwner=current;say(`${playerName()} POCKETED THE QUEEN — COVER IT NEXT SHOT.`);tone(680,.12);return;}
     assignColors(p.kind);const own=ownColor()===p.kind;
-    if(own){shot.own=true;players[current].score+=10;players[current].captured.push(p);say(`${playerName()} POCKET! PLAY AGAIN.`);tone(560,.1);}else{shot.opponent=true;say('OPPONENT COIN POCKETED — TURN PASSES.');tone(180,.08);}updateUI();
+    if(own){shot.own=true;players[current].captured.push(p);say(`${playerName()} POCKET! PLAY AGAIN.`);tone(560,.1);}else{shot.opponent=true;say('OPPONENT COIN POCKETED — TURN PASSES.');tone(180,.08);}updateUI();
   }
   function checkPockets(p){for(const [px,py] of pockets)if((p.x-px)**2+(p.y-py)**2<POCKET_HIT**2){pocket(p);return;}}
   function wallCollision(p){const lo=EDGE+p.r,hi=S-EDGE-p.r;if(p.x<lo){p.x=lo;p.vx=-p.vx;}else if(p.x>hi){p.x=hi;p.vx=-p.vx;}if(p.y<lo){p.y=lo;p.vy=-p.vy;}else if(p.y>hi){p.y=hi;p.vy=-p.vy;}}
   function collide(a,b){const dx=b.x-a.x,dy=b.y-a.y,rr=a.r+b.r,ds=dx*dx+dy*dy;if(ds>=rr*rr)return;const d=Math.sqrt(ds)||.001,nx=dx/d,ny=dy/d,overlap=rr-d,totalInv=1/a.mass+1/b.mass;a.x-=nx*overlap*(1/a.mass)/totalInv;a.y-=ny*overlap*(1/a.mass)/totalInv;b.x+=nx*overlap*(1/b.mass)/totalInv;b.y+=ny*overlap*(1/b.mass)/totalInv;const relative=(b.vx-a.vx)*nx+(b.vy-a.vy)*ny;if(relative>=0)return;const impulse=-(2*relative)/totalInv;a.vx-=impulse*nx/a.mass;a.vy-=impulse*ny/a.mass;b.vx+=impulse*nx/b.mass;b.vy+=impulse*ny/b.mass;tone(120+Math.min(280,Math.abs(impulse)*70),.025);}
   function allBodies(){return [...pieces.filter(p=>!p.dead),striker].filter(p=>!p.dead);}
-  function stepPhysics(){const bodies=allBodies();for(const p of bodies){p.x+=p.vx;p.y+=p.vy;p.vx*=DAMPING;p.vy*=DAMPING;if(Math.hypot(p.vx,p.vy)<STOP_SPEED)p.vx=p.vy=0;checkPockets(p);if(!p.dead)wallCollision(p);}for(let i=0;i<bodies.length;i++)for(let j=i+1;j<bodies.length;j++)if(!bodies[i].dead&&!bodies[j].dead)collide(bodies[i],bodies[j]);if(inShot&&!allBodies().some(p=>p.vx||p.vy))finishTurn();}
-  function beginShot(vx,vy,message){if(inShot)return;drag=null;shot={own:false,opponent:false,queen:false,foul:false,coverAttempt:Boolean(queenPending&&queenPending.owner===current)};striker.vx=vx;striker.vy=vy;inShot=true;say(message);tone(290,.07);}
+  function stepPhysics(){const bodies=allBodies();for(const p of bodies){p.x+=p.vx;p.y+=p.vy;if(p.x-p.r<0||p.x+p.r>S||p.y-p.r<0||p.y+p.r>S)shot.outOfBounds=true;p.vx*=DAMPING;p.vy*=DAMPING;if(Math.hypot(p.vx,p.vy)<STOP_SPEED)p.vx=p.vy=0;checkPockets(p);if(!p.dead)wallCollision(p);}for(let i=0;i<bodies.length;i++)for(let j=i+1;j<bodies.length;j++)if(!bodies[i].dead&&!bodies[j].dead)collide(bodies[i],bodies[j]);if(inShot&&!allBodies().some(p=>p.vx||p.vy))finishTurn();}
+  function beginShot(vx,vy,message){if(inShot||boardFinished)return;drag=null;const backwards=current===0?vy>0:vy<0;shot={own:false,opponent:false,queen:false,strikerPocketed:false,outOfBounds:false,strikerShotFlickedBackward:backwards,foul:backwards,coverAttempt:queenState==='POCKETED_UNCOVERED'&&queenOwner===current};striker.vx=vx;striker.vy=vy;inShot=true;say(message);tone(290,.07);}
+  const remainingFor=player=>players[player].color?pieces.filter(p=>!p.dead&&p.kind===players[player].color).length:9;
+  function endBoard(winner,reason){boardFinished=true;inShot=false;const base=remainingFor(1-winner),queenBonus=queenState==='PERMANENTLY_COVERED'&&queenOwner===winner?3:0,points=base+queenBonus;matchScores[winner]+=points;updateUI();say(matchScores[winner]>=21?`P${winner+1} WINS THE MATCH — ${matchScores[winner]} POINTS!`:`${reason} P${winner+1} WINS THE BOARD +${points}. NEW BOARD TO CONTINUE.`);draw();}
+  function checkBoardEnd(){for(let i=0;i<2;i++)if(players[i].color&&remainingFor(i)===0){if(queenState!=='PERMANENTLY_COVERED'){endBoard(1-i,`P${i+1} CLEARED THEIR COLOUR BEFORE QUEEN COVER.`);}else endBoard(i,'BOARD COMPLETE.');return true;}return false;}
   function finishTurn(){
-    inShot=false;striker.dead=false;striker.vx=striker.vy=0;if(pieces.every(p=>p.dead)){say(`BOARD CLEARED — P1 ${players[0].score} / P2 ${players[1].score}`);updateUI();draw();return;}
+    inShot=false;striker.dead=false;striker.vx=striker.vy=0;shot.foul=shot.foul||shot.strikerPocketed||shot.outOfBounds||shot.strikerShotFlickedBackward;
     let keep=shot.own&&!shot.opponent&&!shot.foul;
-    if(shot.coverAttempt){if(shot.own&&!shot.foul){queenPending=null;keep=true;say(`${playerName()} COVERED THE QUEEN!`);}else{respawnQueen();queenPending=null;keep=false;say('QUEEN NOT COVERED — RETURNED TO CENTRE.');}}
+    if(shot.coverAttempt){if(shot.own&&!shot.foul){queenState='PERMANENTLY_COVERED';keep=true;say(`${playerName()} COVERED THE QUEEN!`);}else{respawnQueen();queenState='BOARD_CENTER';queenOwner=null;keep=false;say('QUEEN NOT COVERED — RETURNED TO CENTRE.');}}
     else if(shot.queen)keep=!shot.foul;
-    if(!keep)current=1-current;striker.x=300;striker.y=baselineY();updateUI();draw();
+    if(shot.foul){returnCapturedPiece(current);keep=false;say('FOUL: STRIKER/BOUNDARY/BACKWARD SHOT — PIECE RETURNED.');}
+    if(checkBoardEnd())return;if(!keep)current=1-current;striker.x=300;striker.y=baselineY();updateUI();draw();
     if(current===1){say('P2 IS AIMING…');clearTimeout(aiTimer);aiTimer=setTimeout(aiTurn,650);}else if(keep)say('P1 SCORED — PLAY AGAIN.');else say('P1 — AIM AND SHOOT.');
   }
   function aiTurn(){if(inShot||current!==1)return;const targetColor=ownColor()??'black';const options=pieces.filter(p=>!p.dead&&(p.kind===targetColor||p.kind==='queen'));if(!options.length){current=0;striker.y=baselineY();updateUI();draw();return;}const target=options.reduce((best,p)=>p.y>best.y?p:best,options[0]);striker.x=Math.max(135,Math.min(465,target.x));striker.y=BASE_TOP;const dx=target.x-striker.x,dy=target.y-striker.y,d=Math.hypot(dx,dy)||1,power=Math.min(MAX_SHOT,7+d/55);beginShot(dx/d*power,dy/d*power,'P2 STRIKER AWAY!');}
@@ -104,8 +108,8 @@
   canvas.addEventListener('pointerdown',e=>{if(current!==0||inShot)return;const p=eventPos(e);if(p.y<450)return;striker.x=Math.max(130,Math.min(470,p.x));striker.y=BASE_BOTTOM;drag={x:p.x,y:p.y};canvas.setPointerCapture(e.pointerId);say('PULL BELOW THE STRIKER TO SET POWER.');draw();});
   canvas.addEventListener('pointermove',e=>{if(!drag||inShot)return;const p=eventPos(e);if(p.y>450&&Math.abs(p.x-striker.x)>14){striker.x=Math.max(130,Math.min(470,p.x));drag={x:striker.x,y:p.y};}else drag=p;draw();});
   canvas.addEventListener('pointerup',e=>{if(!drag||inShot)return;const p=eventPos(e),dx=striker.x-p.x,dy=striker.y-p.y;drag=null;if(dy>=-5){say('PULL BELOW THE STRIKER TO SHOOT.');draw();return;}const d=Math.hypot(dx,dy),power=Math.min(MAX_SHOT,d*.32);if(power<.5)return;beginShot(dx/d*power,dy/d*power,'P1 STRIKER AWAY!');});
-  document.getElementById('reset').onclick=reset;document.getElementById('shoot').onclick=()=>{if(current===0&&!inShot)beginShot(0,-10,'P1 STRAIGHT SHOT!');};document.getElementById('sound').onclick=e=>{sound=!sound;e.currentTarget.innerHTML='SOUND<br>'+(sound?'ON':'OFF');};
-  function loop(now){accumulator+=Math.min(.1,(now-previous)/1000);previous=now;while(accumulator>=STEP){if(inShot)stepPhysics();accumulator-=STEP;}draw();requestAnimationFrame(loop);}reset();requestAnimationFrame(loop);
+  document.getElementById('reset').onclick=()=>startBoard(true);document.getElementById('shoot').onclick=()=>{if(current===0&&!inShot)beginShot(0,-10,'P1 STRAIGHT SHOT!');};document.getElementById('sound').onclick=e=>{sound=!sound;e.currentTarget.innerHTML='SOUND<br>'+(sound?'ON':'OFF');};
+  function loop(now){accumulator+=Math.min(.1,(now-previous)/1000);previous=now;while(accumulator>=STEP){if(inShot)stepPhysics();accumulator-=STEP;}draw();requestAnimationFrame(loop);}startBoard(false);requestAnimationFrame(loop);
 })();
 </script>
 </body>
