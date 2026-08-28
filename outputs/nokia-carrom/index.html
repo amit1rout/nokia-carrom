@@ -28,25 +28,25 @@
   <main class="phone">
     <div class="brand">NOKIA</div>
     <section class="screen">
-      <div class="top"><span>CARROM</span><span id="score">SCORE 000</span><span id="turn">TURN 01</span></div>
+      <div class="top"><span id="p1">P1 000</span><span id="turn">P1 TURN</span><span id="p2">P2 000</span></div>
       <h1>POCKET MASTER</h1>
       <canvas id="board" width="600" height="600" aria-label="Carrom board"></canvas>
       <div class="legend"><span>● BLACK ×9</span><span>● WHITE ×9</span><span>● RED ×1</span></div>
       <div class="message" id="message">DRAG STRIKER TO AIM</div>
     </section>
     <div class="keys"><button id="reset">CLEAR<br>NEW GAME</button><button class="center" id="shoot">FIRE<br>STRIKER</button><button id="sound">SOUND<br>ON</button></div>
-    <p class="help">MOVE THE GOLD STRIKER ON THE BOTTOM DOTS.<br>PULL DOWN, THEN RELEASE TO SHOOT UP.</p>
+    <p class="help" id="help">PLAYER 1: MOVE ON THE BOTTOM DOTS.<br>PULL DOWN, THEN RELEASE TO SHOOT UP.</p>
   </main>
 <script>
 (() => {
   const c = document.getElementById('board'), x = c.getContext('2d');
-  const ui = { score:document.getElementById('score'), turn:document.getElementById('turn'), message:document.getElementById('message') };
+  const ui = { p1:document.getElementById('p1'), p2:document.getElementById('p2'), turn:document.getElementById('turn'), message:document.getElementById('message'), help:document.getElementById('help') };
   const S=600, edge=42, pocketR=27, coinR=15, strikerR=20, baseY=516;
-  let coins=[], striker, score=0, turn=1, drag=null, sound=true, running=false, audio;
+  let coins=[], striker, scores=[0,0], current=0, round=1, drag=null, sound=true, running=false, audio;
   const tone = (hz=240, dur=.045) => { if(!sound) return; try { audio ||= new AudioContext(); const o=audio.createOscillator(), g=audio.createGain(); o.frequency.value=hz; g.gain.setValueAtTime(.04,audio.currentTime); g.gain.exponentialRampToValueAtTime(.001,audio.currentTime+dur); o.connect(g).connect(audio.destination); o.start(); o.stop(audio.currentTime+dur); } catch(e){} };
   const ball = (px,py,r,color,kind) => ({x:px,y:py,vx:0,vy:0,r,color,kind,dead:false});
   function reset(){
-    score=0; turn=1; running=false; drag=null;
+    scores=[0,0]; current=0; round=1; running=false; drag=null;
     coins=[];
     // Standard Carrom opening: queen plus 9 black and 9 white coins.
     coins.push(ball(300,300,coinR,'#b52d25','queen'));
@@ -57,7 +57,16 @@
     ring(6,31,0); ring(12,62,Math.PI/12);
     striker=ball(300,baseY,strikerR,'#d7ad54','striker'); say('PULL DOWN TO AIM & SHOOT'); update(); draw();
   }
-  function update(){ ui.score.textContent='SCORE '+String(score).padStart(3,'0'); ui.turn.textContent='TURN '+String(turn).padStart(2,'0'); }
+  function strikerY(){ return current===0 ? baseY : S-baseY; }
+  function playerName(){ return 'P'+(current+1); }
+  function update(){
+    ui.p1.textContent='P1 '+String(scores[0]).padStart(3,'0');
+    ui.p2.textContent='P2 '+String(scores[1]).padStart(3,'0');
+    ui.turn.textContent=playerName()+' TURN';
+    ui.help.innerHTML=current===0
+      ? 'PLAYER 1: MOVE ON THE BOTTOM DOTS.<br>PULL DOWN, THEN RELEASE TO SHOOT UP.'
+      : 'PLAYER 2: MOVE ON THE TOP DOTS.<br>PULL UP, THEN RELEASE TO SHOOT DOWN.';
+  }
   function say(m){ ui.message.textContent=m; }
   function board(){
     x.clearRect(0,0,S,S);
@@ -81,18 +90,18 @@
     for(let n=58;n<305;n+=58){ x.beginPath();x.fillStyle='#2b524a';x.arc(striker.x+dx/len*n,striker.y+dy/len*n,3,0,7);x.fill(); } x.restore();
   }
   function draw(){ board(); coins.filter(b=>!b.dead).forEach(disc); if(!striker.dead) disc(striker);
-    if(!running) aimLine(drag?drag.x:striker.x,drag?drag.y:700,drag?1:.42);
-    if(drag && !running){ const p=Math.min(1, Math.hypot(striker.x-drag.x,striker.y-drag.y)/150); x.fillStyle='#2b524a';x.fillRect(244,555,112,8);x.fillStyle='#e85032';x.fillRect(246,557,108*p,4); }
+    if(!running) aimLine(drag?drag.x:striker.x,drag?drag.y:(current===0?700:-100),drag?1:.42);
+    if(drag && !running){ const p=Math.min(1, Math.hypot(striker.x-drag.x,striker.y-drag.y)/45); const py=current===0?555:37; x.fillStyle='#2b524a';x.fillRect(244,py,112,8);x.fillStyle='#e85032';x.fillRect(246,py+2,108*p,4); }
   }
-  function pocket(b){ for(const [px,py] of [[edge,edge],[S-edge,edge],[edge,S-edge],[S-edge,S-edge]]) if(Math.hypot(b.x-px,b.y-py)<pocketR){ b.dead=true; if(b.kind==='striker'){ score=Math.max(0,score-10);say('FOUL! -10'); } else { const pts=b.kind==='queen'?50:b.kind==='white'?20:10;score+=pts;say('POCKET! +'+pts);tone(580,.1); } update(); return; } }
+  function pocket(b){ for(const [px,py] of [[edge,edge],[S-edge,edge],[edge,S-edge],[S-edge,S-edge]]) if(Math.hypot(b.x-px,b.y-py)<pocketR){ b.dead=true; if(b.kind==='striker'){ scores[current]=Math.max(0,scores[current]-10);say('FOUL! -10'); } else { const pts=b.kind==='queen'?50:b.kind==='white'?20:10;scores[current]+=pts;say(playerName()+' POCKET! +'+pts);tone(580,.1); } update(); return; } }
   function collide(a,b){ let dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||.01,min=a.r+b.r; if(d>=min)return; let nx=dx/d,ny=dy/d, overlap=min-d; a.x-=nx*overlap/2;a.y-=ny*overlap/2; b.x+=nx*overlap/2;b.y+=ny*overlap/2; let rel=(a.vx-b.vx)*nx+(a.vy-b.vy)*ny; if(rel>0){a.vx-=rel*nx;a.vy-=rel*ny;b.vx+=rel*nx;b.vy+=rel*ny;tone(140+Math.min(300,rel*120),.03);} }
-  function physics(){ const bs=[...coins.filter(b=>!b.dead),striker].filter(b=>!b.dead); let active=false; for(const b of bs){ b.x+=b.vx;b.y+=b.vy;b.vx*=.987;b.vy*=.987; if(Math.hypot(b.vx,b.vy)>.08)active=true; for(const v of ['x','y']){ const lo=edge+ b.r, hi=S-edge-b.r; if(b[v]<lo||b[v]>hi){b[v]=Math.max(lo,Math.min(hi,b[v]));b['v'+v]*=-.75;tone(90,.025);} } pocket(b); } for(let i=0;i<bs.length;i++)for(let j=i+1;j<bs.length;j++)collide(bs[i],bs[j]); draw(); if(active)requestAnimationFrame(physics); else if(running){running=false;striker.dead=false;striker.x=300;striker.y=baseY;striker.vx=striker.vy=0;turn++;update(); if(coins.every(b=>b.dead))say('BOARD CLEARED! '+score+' PTS');else say('TURN '+turn+' — AIM AGAIN');draw();} }
+  function physics(){ const bs=[...coins.filter(b=>!b.dead),striker].filter(b=>!b.dead); let active=false; for(const b of bs){ b.x+=b.vx;b.y+=b.vy;b.vx*=.987;b.vy*=.987; if(Math.hypot(b.vx,b.vy)>.08)active=true; for(const v of ['x','y']){ const lo=edge+ b.r, hi=S-edge-b.r; if(b[v]<lo||b[v]>hi){b[v]=Math.max(lo,Math.min(hi,b[v]));b['v'+v]*=-.75;tone(90,.025);} } pocket(b); } for(let i=0;i<bs.length;i++)for(let j=i+1;j<bs.length;j++)collide(bs[i],bs[j]); draw(); if(active)requestAnimationFrame(physics); else if(running){running=false;striker.dead=false;current=1-current; if(current===0)round++;striker.x=300;striker.y=strikerY();striker.vx=striker.vy=0;update(); if(coins.every(b=>b.dead))say('BOARD CLEARED! P1 '+scores[0]+' / P2 '+scores[1]);else say(playerName()+' — AIM AND SHOOT');draw();} }
   function pos(e){const r=c.getBoundingClientRect(), p=e.touches?e.touches[0]:e;return{x:(p.clientX-r.left)*S/r.width,y:(p.clientY-r.top)*S/r.height};}
-  c.addEventListener('pointerdown',e=>{if(running)return;const p=pos(e); if(p.y>476){striker.x=Math.max(140,Math.min(460,p.x));striker.y=baseY;drag={x:striker.x,y:p.y};c.setPointerCapture(e.pointerId);say('PULL DOWN TO SET POWER');draw();}});
-  c.addEventListener('pointermove',e=>{if(!drag||running)return;const p=pos(e); if(p.y>476 && Math.abs(p.x-striker.x)>18){striker.x=Math.max(140,Math.min(460,p.x));drag={x:striker.x,y:p.y};}else drag=p; draw();});
-  c.addEventListener('pointerup',e=>{if(!drag||running)return;const p=pos(e); const dx=striker.x-p.x,dy=striker.y-p.y; drag=null; if(dy>=-12){say('PULL BELOW THE STRIKER TO SHOOT');draw();return;} const power=Math.min(10,Math.hypot(dx,dy)/13); if(power<.5){draw();return;} striker.vx=dx/Math.hypot(dx,dy)*power;striker.vy=dy/Math.hypot(dx,dy)*power;running=true;say('STRIKER AWAY!');tone(290,.07);physics();});
+  c.addEventListener('pointerdown',e=>{if(running)return;const p=pos(e), ownSide=current===0?p.y>465:p.y<135; if(ownSide){striker.x=Math.max(140,Math.min(460,p.x));striker.y=strikerY();drag={x:striker.x,y:p.y};c.setPointerCapture(e.pointerId);say(playerName()+': PULL '+(current===0?'DOWN':'UP')+' TO SET POWER');draw();}});
+  c.addEventListener('pointermove',e=>{if(!drag||running)return;const p=pos(e), ownSide=current===0?p.y>465:p.y<135; if(ownSide && Math.abs(p.x-striker.x)>18){striker.x=Math.max(140,Math.min(460,p.x));drag={x:striker.x,y:p.y};}else drag=p; draw();});
+  c.addEventListener('pointerup',e=>{if(!drag||running)return;const p=pos(e); const dx=striker.x-p.x,dy=striker.y-p.y, valid=current===0?dy<-8:dy>8; drag=null; if(!valid){say('PULL '+(current===0?'BELOW':'ABOVE')+' THE STRIKER TO SHOOT');draw();return;} const power=Math.min(11,Math.hypot(dx,dy)/4); if(power<.5){draw();return;} striker.vx=dx/Math.hypot(dx,dy)*power;striker.vy=dy/Math.hypot(dx,dy)*power;running=true;say(playerName()+' STRIKER AWAY!');tone(290,.07);physics();});
   document.getElementById('reset').onclick=reset;
-  document.getElementById('shoot').onclick=()=>{if(!running){striker.vx=0;striker.vy=-7;running=true;say('STRAIGHT SHOT!');physics();}};
+  document.getElementById('shoot').onclick=()=>{if(!running){striker.vx=0;striker.vy=current===0?-9:9;running=true;say(playerName()+' STRAIGHT SHOT!');physics();}};
   document.getElementById('sound').onclick=e=>{sound=!sound;e.currentTarget.innerHTML='SOUND<br>'+ (sound?'ON':'OFF');};
   reset();
 })();
