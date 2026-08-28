@@ -31,22 +31,22 @@
       <div class="top"><span id="p1">P1 000</span><span id="turn">P1 TURN</span><span id="p2">P2 000</span></div>
       <h1>POCKET MASTER</h1>
       <canvas id="board" width="600" height="600" aria-label="Carrom board"></canvas>
-      <div class="legend"><span>● BLACK ×9</span><span>● WHITE ×9</span><span>● RED ×1</span></div>
+      <div class="legend"><span>P1 ● BLACK ×9</span><span>P2 ● WHITE ×9</span><span>● RED ×1</span></div>
       <div class="message" id="message">DRAG STRIKER TO AIM</div>
     </section>
     <div class="keys"><button id="reset">CLEAR<br>NEW GAME</button><button class="center" id="shoot">FIRE<br>STRIKER</button><button id="sound">SOUND<br>ON</button></div>
-    <p class="help" id="help">PLAYER 1: MOVE ON THE BOTTOM DOTS.<br>PULL DOWN, THEN RELEASE TO SHOOT UP.</p>
+    <p class="help" id="help">YOU ARE P1 (BLACK). MOVE ON THE BOTTOM DOTS.<br>PULL DOWN, THEN RELEASE TO SHOOT UP.</p>
   </main>
 <script>
 (() => {
   const c = document.getElementById('board'), x = c.getContext('2d');
   const ui = { p1:document.getElementById('p1'), p2:document.getElementById('p2'), turn:document.getElementById('turn'), message:document.getElementById('message'), help:document.getElementById('help') };
   const S=600, edge=42, pocketR=27, coinR=15, strikerR=20, baseY=516;
-  let coins=[], striker, scores=[0,0], current=0, round=1, drag=null, sound=true, running=false, audio;
+  let coins=[], striker, scores=[0,0], current=0, round=1, drag=null, sound=true, running=false, audio, shotOwnPocket=false, shotFoul=false;
   const tone = (hz=240, dur=.045) => { if(!sound) return; try { audio ||= new AudioContext(); const o=audio.createOscillator(), g=audio.createGain(); o.frequency.value=hz; g.gain.setValueAtTime(.04,audio.currentTime); g.gain.exponentialRampToValueAtTime(.001,audio.currentTime+dur); o.connect(g).connect(audio.destination); o.start(); o.stop(audio.currentTime+dur); } catch(e){} };
   const ball = (px,py,r,color,kind) => ({x:px,y:py,vx:0,vy:0,r,color,kind,dead:false});
   function reset(){
-    scores=[0,0]; current=0; round=1; running=false; drag=null;
+    scores=[0,0]; current=0; round=1; running=false; drag=null; shotOwnPocket=false; shotFoul=false;
     coins=[];
     // Standard Carrom opening: queen plus 9 black and 9 white coins.
     coins.push(ball(300,300,coinR,'#b52d25','queen'));
@@ -64,8 +64,8 @@
     ui.p2.textContent='P2 '+String(scores[1]).padStart(3,'0');
     ui.turn.textContent=playerName()+' TURN';
     ui.help.innerHTML=current===0
-      ? 'PLAYER 1: MOVE ON THE BOTTOM DOTS.<br>PULL DOWN, THEN RELEASE TO SHOOT UP.'
-      : 'PLAYER 2: MOVE ON THE TOP DOTS.<br>PULL UP, THEN RELEASE TO SHOOT DOWN.';
+      ? 'YOU ARE P1 (BLACK). MOVE ON THE BOTTOM DOTS.<br>PULL DOWN, THEN RELEASE TO SHOOT UP.'
+      : 'P2 (WHITE) IS AIMING FROM THE TOP…<br>SUCCESSFUL OWN-COLOUR POCKETS KEEP THE TURN.';
   }
   function say(m){ ui.message.textContent=m; }
   function board(){
@@ -93,15 +93,40 @@
     if(!running) aimLine(drag?drag.x:striker.x,drag?drag.y:(current===0?700:-100),drag?1:.42);
     if(drag && !running){ const p=Math.min(1, Math.hypot(striker.x-drag.x,striker.y-drag.y)/45); const py=current===0?555:37; x.fillStyle='#2b524a';x.fillRect(244,py,112,8);x.fillStyle='#e85032';x.fillRect(246,py+2,108*p,4); }
   }
-  function pocket(b){ for(const [px,py] of [[edge,edge],[S-edge,edge],[edge,S-edge],[S-edge,S-edge]]) if(Math.hypot(b.x-px,b.y-py)<pocketR){ b.dead=true; if(b.kind==='striker'){ scores[current]=Math.max(0,scores[current]-10);say('FOUL! -10'); } else { const pts=b.kind==='queen'?50:b.kind==='white'?20:10;scores[current]+=pts;say(playerName()+' POCKET! +'+pts);tone(580,.1); } update(); return; } }
+  function pocket(b){ for(const [px,py] of [[edge,edge],[S-edge,edge],[edge,S-edge],[S-edge,S-edge]]) if(Math.hypot(b.x-px,b.y-py)<pocketR){
+    b.dead=true; const ownColour=current===0?'black':'white';
+    if(b.kind==='striker'){ scores[current]=Math.max(0,scores[current]-10);shotFoul=true;say('FOUL! -10'); }
+    else if(b.kind==='queen'){ scores[current]+=50;say(playerName()+' QUEEN! +50');tone(680,.12); }
+    else if(b.kind===ownColour){ scores[current]+=10;shotOwnPocket=true;say(playerName()+' POCKET! +10 — PLAY AGAIN');tone(580,.1); }
+    else { say('OPPONENT COIN — TURN PASSES');tone(180,.08); }
+    update(); return;
+  } }
   function collide(a,b){ let dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||.01,min=a.r+b.r; if(d>=min)return; let nx=dx/d,ny=dy/d, overlap=min-d; a.x-=nx*overlap/2;a.y-=ny*overlap/2; b.x+=nx*overlap/2;b.y+=ny*overlap/2; let rel=(a.vx-b.vx)*nx+(a.vy-b.vy)*ny; if(rel>0){a.vx-=rel*nx;a.vy-=rel*ny;b.vx+=rel*nx;b.vy+=rel*ny;tone(140+Math.min(300,rel*120),.03);} }
-  function physics(){ const bs=[...coins.filter(b=>!b.dead),striker].filter(b=>!b.dead); let active=false; for(const b of bs){ b.x+=b.vx;b.y+=b.vy;b.vx*=.987;b.vy*=.987; if(Math.hypot(b.vx,b.vy)>.08)active=true; for(const v of ['x','y']){ const lo=edge+ b.r, hi=S-edge-b.r; if(b[v]<lo||b[v]>hi){b[v]=Math.max(lo,Math.min(hi,b[v]));b['v'+v]*=-.75;tone(90,.025);} } pocket(b); } for(let i=0;i<bs.length;i++)for(let j=i+1;j<bs.length;j++)collide(bs[i],bs[j]); draw(); if(active)requestAnimationFrame(physics); else if(running){running=false;striker.dead=false;current=1-current; if(current===0)round++;striker.x=300;striker.y=strikerY();striker.vx=striker.vy=0;update(); if(coins.every(b=>b.dead))say('BOARD CLEARED! P1 '+scores[0]+' / P2 '+scores[1]);else say(playerName()+' — AIM AND SHOOT');draw();} }
+  function beginShot(vx,vy,message){ shotOwnPocket=false;shotFoul=false;striker.vx=vx;striker.vy=vy;running=true;say(message);tone(290,.07);physics(); }
+  function finishTurn(){
+    running=false;striker.dead=false;
+    if(coins.every(b=>b.dead)){ update();say('BOARD CLEARED! P1 '+scores[0]+' / P2 '+scores[1]);draw();return; }
+    if(!shotOwnPocket || shotFoul){ current=1-current; if(current===0)round++; }
+    striker.x=300;striker.y=strikerY();striker.vx=striker.vy=0;update();draw();
+    if(current===1){ say('P2 IS AIMING…');setTimeout(aiTurn,700); }
+    else say(shotOwnPocket?'P1 SCORED — PLAY AGAIN':'P1 — AIM AND SHOOT');
+  }
+  function physics(){ const bs=[...coins.filter(b=>!b.dead),striker].filter(b=>!b.dead); let active=false; for(const b of bs){ b.x+=b.vx;b.y+=b.vy;b.vx*=.987;b.vy*=.987; if(Math.hypot(b.vx,b.vy)>.08)active=true; for(const v of ['x','y']){ const lo=edge+ b.r, hi=S-edge-b.r; if(b[v]<lo||b[v]>hi){b[v]=Math.max(lo,Math.min(hi,b[v]));b['v'+v]*=-.75;tone(90,.025);} } pocket(b); } for(let i=0;i<bs.length;i++)for(let j=i+1;j<bs.length;j++)collide(bs[i],bs[j]); draw(); if(active)requestAnimationFrame(physics); else if(running)finishTurn(); }
+  function aiTurn(){
+    if(running || current!==1)return;
+    const targets=coins.filter(b=>!b.dead && (b.kind==='white' || b.kind==='queen'));
+    if(!targets.length){ current=0;striker.y=strikerY();update();say('P1 — AIM AND SHOOT');draw();return; }
+    const target=targets.reduce((best,b)=>Math.abs(b.x-300)+b.y < Math.abs(best.x-300)+best.y ? b:best,targets[0]);
+    striker.x=Math.max(145,Math.min(455,target.x));striker.y=strikerY();
+    const dx=target.x-striker.x,dy=target.y-striker.y, d=Math.hypot(dx,dy)||1, power=Math.min(10,6+d/65);
+    beginShot(dx/d*power,dy/d*power,'P2 STRIKER AWAY!');
+  }
   function pos(e){const r=c.getBoundingClientRect(), p=e.touches?e.touches[0]:e;return{x:(p.clientX-r.left)*S/r.width,y:(p.clientY-r.top)*S/r.height};}
-  c.addEventListener('pointerdown',e=>{if(running)return;const p=pos(e), ownSide=current===0?p.y>465:p.y<135; if(ownSide){striker.x=Math.max(140,Math.min(460,p.x));striker.y=strikerY();drag={x:striker.x,y:p.y};c.setPointerCapture(e.pointerId);say(playerName()+': PULL '+(current===0?'DOWN':'UP')+' TO SET POWER');draw();}});
-  c.addEventListener('pointermove',e=>{if(!drag||running)return;const p=pos(e), ownSide=current===0?p.y>465:p.y<135; if(ownSide && Math.abs(p.x-striker.x)>18){striker.x=Math.max(140,Math.min(460,p.x));drag={x:striker.x,y:p.y};}else drag=p; draw();});
-  c.addEventListener('pointerup',e=>{if(!drag||running)return;const p=pos(e); const dx=striker.x-p.x,dy=striker.y-p.y, valid=current===0?dy<-8:dy>8; drag=null; if(!valid){say('PULL '+(current===0?'BELOW':'ABOVE')+' THE STRIKER TO SHOOT');draw();return;} const power=Math.min(11,Math.hypot(dx,dy)/4); if(power<.5){draw();return;} striker.vx=dx/Math.hypot(dx,dy)*power;striker.vy=dy/Math.hypot(dx,dy)*power;running=true;say(playerName()+' STRIKER AWAY!');tone(290,.07);physics();});
+  c.addEventListener('pointerdown',e=>{if(running || current!==0)return;const p=pos(e), ownSide=p.y>455; if(ownSide){striker.x=Math.max(130,Math.min(470,p.x));striker.y=strikerY();drag={x:striker.x,y:p.y};c.setPointerCapture(e.pointerId);say('P1: PULL DOWN TO SET POWER');draw();}});
+  c.addEventListener('pointermove',e=>{if(!drag||running)return;const p=pos(e), ownSide=p.y>455; if(ownSide && Math.abs(p.x-striker.x)>14){striker.x=Math.max(130,Math.min(470,p.x));drag={x:striker.x,y:p.y};}else drag=p; draw();});
+  c.addEventListener('pointerup',e=>{if(!drag||running)return;const p=pos(e); const dx=striker.x-p.x,dy=striker.y-p.y;drag=null; if(dy>=-6){say('PULL BELOW THE STRIKER TO SHOOT');draw();return;} const power=Math.min(12,Math.hypot(dx,dy)/3.5); if(power<.5){draw();return;} const d=Math.hypot(dx,dy);beginShot(dx/d*power,dy/d*power,'P1 STRIKER AWAY!');});
   document.getElementById('reset').onclick=reset;
-  document.getElementById('shoot').onclick=()=>{if(!running){striker.vx=0;striker.vy=current===0?-9:9;running=true;say(playerName()+' STRAIGHT SHOT!');physics();}};
+  document.getElementById('shoot').onclick=()=>{if(!running && current===0)beginShot(0,-10,'P1 STRAIGHT SHOT!');};
   document.getElementById('sound').onclick=e=>{sound=!sound;e.currentTarget.innerHTML='SOUND<br>'+ (sound?'ON':'OFF');};
   reset();
 })();
